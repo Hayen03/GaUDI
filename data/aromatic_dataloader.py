@@ -20,6 +20,8 @@ from utils.args_edm import Args_EDM
 from utils.ring_graph import get_rings, get_rings_adj
 from utils.molgraph import get_connectivity_matrix, get_edges
 
+from utils.extend_df import extend_df, DFKeys, develop_df
+
 DTYPE = torch.float32
 INT_DTYPE = torch.int8
 # ATOMS_LIST = __ATOM_LIST__[:8]
@@ -43,7 +45,7 @@ class RandomRotation(object):
 
 
 class AromaticDataset(Dataset):
-    def __init__(self, args, task: str = "train"):
+    def __init__(self, args, task: str = "train", transmission_bounds=None):
         """
         Args:
             args: All the arguments.
@@ -92,6 +94,12 @@ class AromaticDataset(Dataset):
         x, node_mask, edge_mask, node_features, y = self.__getitem__(0)[:5]
         self.num_node_features = node_features.shape[1]
         self.num_targets = y.shape[0]
+        
+        #### adding min and max values for transmission curves
+        self.transmission_min_x = transmission_bounds[0] if transmission_bounds is not None else None
+        self.transmission_max_x = transmission_bounds[1] if transmission_bounds is not None else None
+        self.transmission_min_y = transmission_bounds[2] if transmission_bounds is not None else None
+        self.transmission_max_y = transmission_bounds[3] if transmission_bounds is not None else None
 
     def get_edge_mask_orientation(self):
         if self._edge_mask_orientation is None:
@@ -255,8 +263,8 @@ def get_paths(args):
         csv_path = args.csv_file
         xyz_path = args.xyz_root
     elif args.dataset == "cata":
-        csv_path = "/home/tomerweiss/PBHs-design/data/COMPAS-1x.csv"
-        xyz_path = "/home/tomerweiss/PBHs-design/data/peri-cata-89893-xyz"
+        csv_path = r"d:/Documents/dev/generator-main_v2/DATASETS/MODIFIED_COMPAS-1D.csv"
+        xyz_path = r"d:/Documents/dev/PBHs-design/compas-COMPAS_Oct2023/COMPAS-1/COMPAS-1D-xyzs/pahs-cata-8678-xyz"
     elif args.dataset == "peri":
         csv_path = "/home/tomerweiss/PBHs-design/data/peri-xtb-data-55821.csv"
         xyz_path = "/home/tomerweiss/PBHs-design/data/peri-cata-89893-xyz"
@@ -280,34 +288,41 @@ def get_splits(args, random_seed=42, val_frac=0.1, test_frac=0.1):
             if getattr(args, "target_features", None) is not None
             else []
         )
-        df = pd.read_csv(csv_path, usecols=["name", "nRings", "inchi"] + targets)
+        df = pd.read_csv(csv_path, usecols=["name", "nRings", "inchi", DFKeys.CONTACTS, DFKeys.TRANSMISSIONS, DFKeys.ADJ_MATRIX] + targets)
         df.rename(columns={"nRings": "n_rings", "name": "molecule"}, inplace=True)
         args.max_nodes = min(args.max_nodes, 10)
     else:
         df = pd.read_csv(csv_path)
+
+    extend_df(df)
+    transmissions_bounds = df.loc[:, DFKeys.MIN_TRANS_X].min(), df.loc[:, DFKeys.MAX_TRANS_X].max(), df.loc[:, DFKeys.MIN_TRANS_Y].min(), df.loc[:, DFKeys.MAX_TRANS_Y].max()
+    df = develop_df(df)
 
     df_all = df.copy()
     df_test = df.sample(frac=test_frac, random_state=random_seed)
     df = df.drop(df_test.index)
     df_val = df.sample(frac=val_frac, random_state=random_seed)
     df_train = df.drop(df_val.index)
-    return df_train, df_val, df_test, df_all
+    return df_train, df_val, df_test, df_all, transmissions_bounds
 
 
 def create_data_loaders(args):
-    args.df_train, args.df_val, args.df_test, args.df_all = get_splits(args)
+    args.df_train, args.df_val, args.df_test, args.df_all, trans_bounds = get_splits(args)
 
     train_dataset = AromaticDataset(
         args=args,
         task="train",
+        transmission_bounds=trans_bounds,
     )
     val_dataset = AromaticDataset(
         args=args,
         task="val",
+        transmission_bounds=trans_bounds,
     )
     test_dataset = AromaticDataset(
         args=args,
         task="test",
+        transmission_bounds=trans_bounds,
     )
     train_loader = DataLoader(
         train_dataset,
