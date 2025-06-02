@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import re
+import networkx as nx
 
 """
 Helper functions to extend and format a dataframe with additional information
@@ -107,6 +108,9 @@ def extend_df(df):
     add_adjacency_matrix(df)
     
 def develop_df(df):
+	"""
+	Develop the dataframe by adding an entry for each pair of contact for each molecule.
+	"""
 	df  = df.drop([DFKeys.MIN_TRANS_Y, DFKeys.MAX_TRANS_Y, DFKeys.NB_CONTACTS, DFKeys.EIGVALS, DFKeys.EIGVECS], axis=1)
 	wdf = pd.DataFrame({colname: [] for colname in df.columns})
 	for _, row in df.iterrows():
@@ -116,3 +120,97 @@ def develop_df(df):
 			new_row[DFKeys.TRANSMISSIONS] = row.loc[DFKeys.TRANSMISSIONS][i]
 			wdf = pd.concat([wdf, new_row.to_frame().T], ignore_index=True)
 	return wdf
+
+def gen_xyz(adj_matrix):
+	"""
+	Generate the xyz coordinates for the carbon atoms based on the adjacency matrix.
+
+	Assume every atoms is a carbon atom in a hexagonal matrix with no island and with distance 1 with all of its neighbors
+ 
+	returns: array of coordinates for each atom in the graph and a set of edges
+	"""
+	graph = nx.Graph(adj_matrix)
+	cycles = nx.minimum_cycle_basis(graph)
+	#print(f"cycles: {cycles}")
+	coords = [None for _ in range(len(graph.nodes()))]
+	edges = {}
+	first = True
+	#atoms = 0
+	while len(cycles) > 0:
+		if first:
+			cycle = cycles.pop(0)
+			first = False
+		else:
+			cycle = find_connected_cycle(cycles, edges)
+		#print(f"\tcycle: {cycle}")
+		a1 = None
+		a2 = None
+		horaire = False
+		for anext in cycle:
+			if coords[anext] is None:
+				if a2 is None:# first atom in the cycle, potentially the first atom in the whole graph
+				# since we align the cycle so that the first two atoms are an already placed edge, we can assume that if this atom has no coordinates yet, it is the first atom in the graph
+					coords[anext] = np.array((0., 0., 0.)) # first atom in graph at origin
+					#atoms += 1
+					#print(f"{atoms}e atom !: {anext} ({coords[anext]})")
+				elif a1 is None:
+        			# Similar reasoning as above, but this time we assume that this is the second atom in the graph
+					coords[anext] = np.array((1., 0., 0.)) # second atom in graph next to first
+					#atoms += 1
+					#print(f"{atoms}e atom !!: {anext} ({coords[anext]})")
+				else:
+					v1 = coords[a1]
+					v2 = coords[a2]
+					d = v2-v1
+					angle = -60 if horaire else 60
+					costdx = np.cos(np.deg2rad(angle)) * d[0]
+					sintdx = np.sin(np.deg2rad(angle)) * d[0]
+					costdy = np.cos(np.deg2rad(angle)) * d[1]
+					sintdy = np.sin(np.deg2rad(angle)) * d[1]
+					d_ = np.array((costdx - sintdy, sintdx + costdy, 0.))
+					coords[anext] = v2 + d_
+					#atoms += 1
+					#print(f"{atoms}e atom: {anext} ({coords[anext]})")
+			elif a1 is None and a2 is not None: # Détecter la direction du cycle
+				if (a2, anext) in edges:
+					horaire = not edges[(a2, anext)]
+				elif (anext, a2) in edges:
+					horaire = edges[(anext, a2)]
+				else:
+					horaire = False
+    
+			a1 = a2
+			a2 = anext
+			if a1 is not None and a2 is not None and (a1, a2) not in edges and (a2, a1) not in edges:
+				edges[(a1, a2)] = horaire
+		# Connect the last atom in the cycle to the first one
+		e = (cycle[-1], cycle[0])
+		if e not in edges and (cycle[0], cycle[-1]) not in edges:
+			edges[e] = horaire
+		#print(f"\edges: {edges}")
+   
+	return coords, edges.keys()
+
+def find_connected_cycle(cycles, edges):
+	"""
+	Find a cycle that is connected to the edges already found.
+	"""
+	for i, c in enumerate(cycles):
+		for e in range(len(c)):
+			n1 = c[e]
+			n2 = c[(e + 1) % len(c)]
+			if (n1, n2) in edges:
+				cycle = cycles.pop(i)
+				# rotate the cycle so that the connected edge is at the start
+				cycle_ = cycle[e:] + cycle[:e]
+				#print(f"\t\t{cycle} -> {cycle_} !")
+				return cycle_
+			elif (n2, n1) in edges:
+				cycle = cycles.pop(i)
+				cycle_ = cycle[e:] + cycle[:e]
+				cycle_ = list(reversed(cycle_))
+				cycle_ = cycle_[-2:] + cycle_[:-2]
+				#print(f"\t\t{cycle} -> {cycle_} !!")
+				return cycle_
+
+	return None

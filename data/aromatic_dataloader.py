@@ -53,6 +53,9 @@ class AromaticDataset(Dataset):
         """
         self.csv_file, self.xyz_root = get_paths(args)
 
+        #### necessaire pour les tests
+        self.force_calc = getattr(args, "force_calc", False)
+
         self.task = task
         self.rings_graph = args.rings_graph
         self.normalize = args.normalize
@@ -124,23 +127,36 @@ class AromaticDataset(Dataset):
         name = df_row["molecule"]
         file_path = self.xyz_root + "/" + name
         if os.path.exists(file_path + ".xyz"):
-            mol = load_xyz(file_path + ".xyz")
-            atom_connectivity = get_connectivity_matrix(
-                mol.atoms, skip_hydrogen=skip_hydrogen
+            mol = load_xyz(file_path + ".xyz") # Il faut juste espéré que les atomes dans le xyz et dans la matrice concordent...
+            # La matrice de connectiivté est précalculée dans le df
+            atom_connectivity = df_row[DFKeys.ADJ_MATRIX]
+            atom_connectivity_check = get_connectivity_matrix(
+            mol.atoms, skip_hydrogen=skip_hydrogen
             )  # build connectivity matrix
+            # print in log
+            with open(r"d:\Documents\dev\GaUDI\log.txt", "at") as f:
+                f.write(f"""{name} {df_row[DFKeys.CONTACTS]}:
+    len(ac)={len(atom_connectivity)}
+    len(ac_check)={len(atom_connectivity_check)}
+    same={np.array_equal(atom_connectivity, atom_connectivity_check)}\n""")
+            # assert np.array_equal(atom_connectivity, atom_connectivity_check)
             # edges = bonds
         elif os.path.exists(file_path + ".pkl"):
-            mol, atom_connectivity = from_rdkit(file_path + ".pkl")
+            mol, atom_connectivity_check = from_rdkit(file_path + ".pkl")
+            atom_connectivity = df_row[DFKeys.ADJ_MATRIX]
         else:
             raise NotImplementedError(file_path)
         edges = get_edges(atom_connectivity)
+        edges_check = get_edges(atom_connectivity_check)
+        with open(r"d:\Documents\dev\GaUDI\log.txt", "at") as f:
+            f.write(f"""\tedges: {edges}\n\tedges_check: {edges_check}\n""")
         return mol, edges, atom_connectivity, name
 
     def get_rings(self, df_row):
         name = df_row["molecule"]
         os.makedirs(self.xyz_root + "_rings_preprocessed", exist_ok=True)
         preprocessed_path = self.xyz_root + "_rings_preprocessed/" + name + ".xyz"
-        if Path(preprocessed_path).is_file():
+        if Path(preprocessed_path).is_file() and not self.force_calc:
             x, adj, node_features, orientation = torch.load(preprocessed_path)
         else:
             mol, edges, atom_connectivity, _ = self.get_mol(df_row, skip_hydrogen=True)

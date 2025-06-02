@@ -5,21 +5,39 @@ import random
 import numpy as np
 import pandas as pd
 import torch
+from data.aromatic_dataloader import create_data_loaders
 from utils.args_edm import Args_EDM
 import re
-from utils.extend_df import extend_df, DFKeys, develop_df
+from utils.extend_df import extend_df, DFKeys, develop_df, gen_xyz
+import matplotlib.pyplot as plt
+
+def draw_mol(coords, edges):
+    X = [c[0] for c in coords]
+    Y = [c[1] for c in coords]
+    
+    fig = plt.figure()
+    ax = fig.add_subplot()
+    ax.scatter(X, Y, color="black")
+    for i, j in edges:
+        ax.plot([X[i], X[j]], [Y[i], Y[j]], color='black', linewidth=2)
+    ax.set_aspect('equal')
+    plt.show()
+    return
 
 def main(args):
-    #train_loader, _, _ = create_data_loaders(args)
-    #print(train_loader)
-	df = pd.read_csv(r"d:\Documents\dev\generator-main_v2\DATASETS\MODIFIED_COMPAS-1D.csv")
-    #print(df)
-	row = df.loc[0]
-	extend_df(df)
-	df = develop_df(df)
-	print(df.columns)
-	print(df[[DFKeys.CONTACTS, DFKeys.TRANSMISSIONS]])
-	return
+    train_loader, val_loader, test_loader = create_data_loaders(args)
+    l = train_loader.dataset.df.shape[0]
+    
+    for _ in range(5):
+        row = train_loader.dataset.df.iloc[random.randint(0, l)]
+        #print(f"Smile: {row["smiles"]}")
+        adj_matrix = row[DFKeys.ADJ_MATRIX]
+        #print(adj_matrix)
+        coords, edges = gen_xyz(adj_matrix)
+        #print(list(map(lambda c: c[:], coords)))
+        #print(edges)
+        draw_mol(coords, edges)
+    return
 
 if __name__ == "__main__":
 	# set seeds
