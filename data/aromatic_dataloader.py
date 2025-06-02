@@ -20,7 +20,7 @@ from utils.args_edm import Args_EDM
 from utils.ring_graph import get_rings, get_rings_adj
 from utils.molgraph import get_connectivity_matrix, get_edges
 
-from utils.extend_df import extend_df, DFKeys, develop_df, gen_mol
+from utils.extend_df import extend_df, DFKeys, develop_df, gen_mol, get_contacts_and_rotations, CONTACT_TYPES, prepare_transmission_curve
 
 DTYPE = torch.float32
 INT_DTYPE = torch.int8
@@ -55,6 +55,11 @@ class AromaticDataset(Dataset):
 
         #### necessaire pour les tests
         self.force_calc = getattr(args, "force_calc", False)
+        #### adding min and max values for transmission curves
+        self.transmission_min_x = transmission_bounds[0] if transmission_bounds is not None else None
+        self.transmission_max_x = transmission_bounds[1] if transmission_bounds is not None else None
+        self.transmission_min_y = transmission_bounds[2] if transmission_bounds is not None else None
+        self.transmission_max_y = transmission_bounds[3] if transmission_bounds is not None else None
 
         self.task = task
         self.rings_graph = args.rings_graph
@@ -97,12 +102,6 @@ class AromaticDataset(Dataset):
         x, node_mask, edge_mask, node_features, y = self.__getitem__(0)[:5]
         self.num_node_features = node_features.shape[1]
         self.num_targets = y.shape[0]
-        
-        #### adding min and max values for transmission curves
-        self.transmission_min_x = transmission_bounds[0] if transmission_bounds is not None else None
-        self.transmission_max_x = transmission_bounds[1] if transmission_bounds is not None else None
-        self.transmission_min_y = transmission_bounds[2] if transmission_bounds is not None else None
-        self.transmission_max_y = transmission_bounds[3] if transmission_bounds is not None else None
 
     def get_edge_mask_orientation(self):
         if self._edge_mask_orientation is None:
@@ -158,7 +157,7 @@ class AromaticDataset(Dataset):
         os.makedirs(self.xyz_root + "_rings_preprocessed", exist_ok=True)
         preprocessed_path = self.xyz_root + "_rings_preprocessed/" + name + ".xyz"
         if Path(preprocessed_path).is_file() and not self.force_calc:
-            x, adj, node_features, orientation = torch.load(preprocessed_path)
+            x, adj, node_features, orientation, contact_types, contact_orientations = torch.load(preprocessed_path)
         else:
             mol, edges, atom_connectivity, _ = self.get_mol(df_row, skip_hydrogen=True)
             # get_figure(mol, edges, showPlot=True, filename='4.png')
@@ -173,8 +172,11 @@ class AromaticDataset(Dataset):
                 one_hot(knot_type, num_classes=len(self.knots_list)).squeeze(1).float()
             )
             orientation = [k.orientation for k in knots]
-            torch.save([x, adj, node_features, orientation], preprocessed_path)
-        return x, adj, node_features, orientation
+            contact_types, contact_orientations = get_contacts_and_rotations(knots, df_row[DFKeys.CONTACTS])
+            contact_types = one_hot(torch.tensor(contact_types), num_classes=len(CONTACT_TYPES)).float()
+            contact_orientations = torch.tensor(contact_orientations).float()
+            torch.save([x, adj, node_features, orientation, contact_types, contact_orientations], preprocessed_path)
+        return x, adj, node_features, orientation, contact_types, contact_orientations
 
     def get_atoms(self, df_row):
         name = df_row["molecule"]
@@ -206,7 +208,20 @@ class AromaticDataset(Dataset):
             y = (y - self.mean) / self.std
 
         # creation of nodes, edges and there features
-        x, adj, node_features, orientation = self.get_rings(df_row)
+        x, adj, node_features, orientation, contact_types, contact_orientations = self.get_rings(df_row)
+        
+        # préparation et normalisation de la courbe de transmission
+        transmission_curve, transmission_mask = prepare_transmission_curve(
+            df_row[DFKeys.TRANSMISSIONS], 
+            df_row[DFKeys.MIN_TRANS_X], 
+            df_row[DFKeys.MIN_TRANS_X], 
+            self.transmission_min_x, 
+            self.transmission_max_x, 
+            self.transmission_min_y, 
+            self.transmission_max_y,
+        )
+        transmission_curve = torch.tensor(transmission_curve)
+        transmission_mask = torch.tensor(transmission_mask)
 
         if self.orientation:
             # adjust to max nodes shape
@@ -265,9 +280,9 @@ class AromaticDataset(Dataset):
                 adj_full[:n_nodes, :n_nodes] = adj
 
         if self.return_adj:
-            return x_full, node_mask, edge_mask, node_features_full, adj_full, y
+            return x_full, node_mask, edge_mask, node_features_full, adj_full, y, transmission_curve, transmission_mask, contact_types, contact_orientations
         else:
-            return x_full, node_mask, edge_mask, node_features_full, y
+            return x_full, node_mask, edge_mask, node_features_full, y, transmission_curve, transmission_mask, contact_types, contact_orientations
 
     def __getitem__(self, idx):
         index = self.examples[idx]

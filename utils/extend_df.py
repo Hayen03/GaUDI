@@ -24,6 +24,14 @@ class DFKeys:
     EIGVALS = "eigvals"
     EIGVECS = "eigvecs"
 
+CONTACT_TYPES = {
+    "oooooo": 0, 
+    "xooooo": 1, 
+    "xxoooo": 2, 
+    "xoxooo": 3, 
+    "xooxoo": 4
+}
+
 """
 Steps of the transmission curve abscises
 """
@@ -118,7 +126,7 @@ def develop_df(df):
 		for i, contact in enumerate(row.loc[DFKeys.CONTACTS]):
 			new_row = row.copy()
 			new_row[DFKeys.CONTACTS] = contact
-			new_row[DFKeys.TRANSMISSIONS] = row.loc[DFKeys.TRANSMISSIONS][i]
+			new_row[DFKeys.TRANSMISSIONS] = np.array(row.loc[DFKeys.TRANSMISSIONS][i])
 			wdf = pd.concat([wdf, new_row.to_frame().T], ignore_index=True)
 	return wdf
 
@@ -223,3 +231,71 @@ def gen_mol(adj_matrix):
     coords, edges = gen_xyz(adj_matrix)
     mol = Mol(list(map(lambda c: ("C", c[0], c[1], c[2]), coords)))
     return mol, edges
+
+def get_contact_and_rotation(knot, contact):
+	"""
+	return the contact type and its orientation 
+	"""
+	ring_idx = list(map(lambda a: a.index, knot.atoms))
+	if contact[0] in ring_idx and contact[1] in ring_idx:
+		first = ring_idx.index(contact[0])
+		second = ring_idx.index(contact[1])
+		first, second = min(first, second), max(first, second)
+		dist = second - first
+		if dist == 1:
+			contact_type = CONTACT_TYPES["xxoooo"]
+			rotation = first
+		elif dist == 5:
+			contact_type = CONTACT_TYPES["xxoooo"]
+			rotation = second
+		elif dist == 2:
+			contact_type = CONTACT_TYPES["xoxooo"]
+			rotation = first
+		elif dist == 4:
+			contact_type = CONTACT_TYPES["xoxooo"]
+			rotation = second
+		elif dist == 3:
+			contact_type = CONTACT_TYPES["xooxoo"]
+			rotation = first
+	elif contact[0] in ring_idx:
+		contact_type = 1
+		rotation = ring_idx.index(contact[0])
+	elif contact[1] in ring_idx:
+		contact_type = 1
+		rotation = ring_idx.index(contact[1])
+	else:
+		contact_type = 0
+		rotation = None
+	if rotation is not None:
+		center = np.array(knot.get_coord())
+		dest = np.array(knot.atoms[rotation].get_coord())
+		rotation = dest-center
+	else:
+		rotation = np.array((0., 0., 0.))
+	return contact_type, rotation
+
+def get_contacts_and_rotations(knots, contact):
+	"""
+	Return the contact types and their orientations for each knot.
+	"""
+	contacts = []
+	rotations = []
+	for knot in knots:
+		cont, rotation = get_contact_and_rotation(knot, contact)
+		contacts.append(cont)
+		rotations.append(rotation)
+	return contacts, rotations
+
+def prepare_transmission_curve(trans, trans_min_x, trans_max_x, tot_min_x, tot_max_x, tot_min_y, tot_max_y):
+	"""
+	Prepare the transmission curve by padding and normalizing it and return the padded curve and the mask
+	"""
+	#print(f"trans_min_x: {trans_min_x}, tot_min_x: {tot_min_x}")
+	pad_before = int(np.ceil(abs(trans_min_x - tot_min_x)/TRANSMISSION_STEP))
+	l = int(np.ceil((tot_max_x - tot_min_x)/TRANSMISSION_STEP)) + 1
+	pad_after = l - len(trans) - pad_before
+	#print(f"pad_before: {pad_before}, pad_after: {pad_after}, l: {l}")
+	mask = np.pad(np.ones(len(trans)), (pad_before, pad_after))
+	norm = np.max([np.abs(tot_min_y), np.abs(tot_max_y)])
+	padded_trans = np.pad(trans/norm, (pad_before, pad_after))
+	return padded_trans, mask

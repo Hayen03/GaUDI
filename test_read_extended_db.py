@@ -11,7 +11,7 @@ import re
 from utils.extend_df import extend_df, DFKeys, develop_df, gen_xyz
 import matplotlib.pyplot as plt
 
-def draw_mol(coords, edges):
+def draw_mol(coords, edges, smiles=None):
     X = [c[0] for c in coords]
     Y = [c[1] for c in coords]
     
@@ -21,6 +21,8 @@ def draw_mol(coords, edges):
     for i, j in edges:
         ax.plot([X[i], X[j]], [Y[i], Y[j]], color='black', linewidth=2)
     ax.set_aspect('equal')
+    if smiles is not None:
+        ax.set_title(smiles)
     plt.show()
     return
 
@@ -28,7 +30,7 @@ def main(args):
     train_loader, val_loader, test_loader = create_data_loaders(args)
     l = train_loader.dataset.df.shape[0]
     
-    for _ in range(5):
+    for _ in range(20):
         row = train_loader.dataset.df.iloc[random.randint(0, l)]
         #print(f"Smile: {row["smiles"]}")
         adj_matrix = row[DFKeys.ADJ_MATRIX]
@@ -36,7 +38,9 @@ def main(args):
         coords, edges = gen_xyz(adj_matrix)
         #print(list(map(lambda c: c[:], coords)))
         #print(edges)
-        draw_mol(coords, edges)
+        draw_mol(coords, edges, row["smiles"])
+        
+    print(train_loader.dataset[random.randint(0, l)])
     return
 
 if __name__ == "__main__":
@@ -60,8 +64,8 @@ if __name__ == "__main__":
         torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     )
 
-    print(args.exp_dir)
-    print("Args:", args)
+    #print(args.exp_dir)
+    #print("Args:", args)
     
     
     main(args)
