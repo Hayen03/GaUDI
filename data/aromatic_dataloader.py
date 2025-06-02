@@ -20,7 +20,7 @@ from utils.args_edm import Args_EDM
 from utils.ring_graph import get_rings, get_rings_adj
 from utils.molgraph import get_connectivity_matrix, get_edges
 
-from utils.extend_df import extend_df, DFKeys, develop_df
+from utils.extend_df import extend_df, DFKeys, develop_df, gen_mol
 
 DTYPE = torch.float32
 INT_DTYPE = torch.int8
@@ -127,29 +127,30 @@ class AromaticDataset(Dataset):
         name = df_row["molecule"]
         file_path = self.xyz_root + "/" + name
         if os.path.exists(file_path + ".xyz"):
-            mol = load_xyz(file_path + ".xyz") # Il faut juste espéré que les atomes dans le xyz et dans la matrice concordent...
+            #mol = load_xyz(file_path + ".xyz") # Il faut juste espéré que les atomes dans le xyz et dans la matrice concordent...
             # La matrice de connectiivté est précalculée dans le df
             atom_connectivity = df_row[DFKeys.ADJ_MATRIX]
-            atom_connectivity_check = get_connectivity_matrix(
-            mol.atoms, skip_hydrogen=skip_hydrogen
-            )  # build connectivity matrix
+            mol, edges = gen_mol(atom_connectivity)
+            #atom_connectivity_check = get_connectivity_matrix(
+            #mol.atoms, skip_hydrogen=skip_hydrogen
+            #)  # build connectivity matrix
             # print in log
-            with open(r"d:\Documents\dev\GaUDI\log.txt", "at") as f:
-                f.write(f"""{name} {df_row[DFKeys.CONTACTS]}:
-    len(ac)={len(atom_connectivity)}
-    len(ac_check)={len(atom_connectivity_check)}
-    same={np.array_equal(atom_connectivity, atom_connectivity_check)}\n""")
+            #with open(r"d:\Documents\dev\GaUDI\log.txt", "at") as f:
+                #f.write(f"""{name} {df_row[DFKeys.CONTACTS]}:
+#    len(ac)={len(atom_connectivity)}
+#    len(ac_check)={len(atom_connectivity_check)}
+#    same={np.array_equal(atom_connectivity, atom_connectivity_check)}\n""")
             # assert np.array_equal(atom_connectivity, atom_connectivity_check)
             # edges = bonds
         elif os.path.exists(file_path + ".pkl"):
-            mol, atom_connectivity_check = from_rdkit(file_path + ".pkl")
-            atom_connectivity = df_row[DFKeys.ADJ_MATRIX]
+            mol, atom_connectivity = from_rdkit(file_path + ".pkl")
+            edges = get_edges(atom_connectivity)
+            #atom_connectivity = df_row[DFKeys.ADJ_MATRIX]
         else:
             raise NotImplementedError(file_path)
-        edges = get_edges(atom_connectivity)
-        edges_check = get_edges(atom_connectivity_check)
-        with open(r"d:\Documents\dev\GaUDI\log.txt", "at") as f:
-            f.write(f"""\tedges: {edges}\n\tedges_check: {edges_check}\n""")
+        #edges_check = get_edges(atom_connectivity_check)
+        #with open(r"d:\Documents\dev\GaUDI\log.txt", "at") as f:
+        #    f.write(f"""\tedges: {edges}\n\tedges_check: {edges_check}\n""")
         return mol, edges, atom_connectivity, name
 
     def get_rings(self, df_row):

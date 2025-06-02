@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import re
 import networkx as nx
+from data.mol import Mol
 
 """
 Helper functions to extend and format a dataframe with additional information
@@ -214,3 +215,11 @@ def find_connected_cycle(cycles, edges):
 				return cycle_
 
 	return None
+
+def gen_mol(adj_matrix):
+    """
+    Generate the Mol object and edges from the adjacency matrix.
+    """
+    coords, edges = gen_xyz(adj_matrix)
+    mol = Mol(list(map(lambda c: ("C", c[0], c[1], c[2]), coords)))
+    return mol, edges
