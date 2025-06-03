@@ -641,7 +641,7 @@ class EnVariationalDiffusion(torch.nn.Module):
 
         return log_p_xh_given_z
 
-    def compute_loss(self, x, h, node_mask, edge_mask, context, t0_always):
+    def compute_loss(self, x, h, transmission, contact_types, contact_orientations, node_mask, edge_mask, transmission_mask, context, t0_always):
         """Computes an estimator for the variational lower bound, or the simple loss (MSE)."""
 
         # This part is about whether to include loss term 0 always.
@@ -774,7 +774,7 @@ class EnVariationalDiffusion(torch.nn.Module):
             "error": error.squeeze(),
         }
 
-    def forward(self, x, h, node_mask=None, edge_mask=None, context=None):
+    def forward(self, x, h, transmission, contact_types, contact_orientations, node_mask=None, edge_mask=None, transmission_mask=None, context=None):
         """
         Computes the loss (type l2 or NLL) if training. And if eval then always computes NLL.
         """
@@ -788,12 +788,12 @@ class EnVariationalDiffusion(torch.nn.Module):
         if self.training:
             # Only 1 forward pass when t0_always is False.
             loss, loss_dict = self.compute_loss(
-                x, h, node_mask, edge_mask, context, t0_always=False
+                x, h, transmission, contact_types, contact_orientations, node_mask, edge_mask, transmission_mask, context, t0_always=False
             )
         else:
             # Less variance in the estimator, costs two forward passes.
             loss, loss_dict = self.compute_loss(
-                x, h, node_mask, edge_mask, context, t0_always=True
+                x, h, transmission, contact_types, contact_orientations, node_mask, edge_mask, transmission_mask, context, t0_always=True
             )
 
         neg_log_pxh = loss

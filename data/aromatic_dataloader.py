@@ -285,10 +285,17 @@ class AromaticDataset(Dataset):
                 adj_full = zeros(self.max_nodes, self.max_nodes)
                 adj_full[:n_nodes, :n_nodes] = adj
 
+        # adjust contact types and contact orientations to max nodes shape
+        pad_depth = self.max_nodes - contact_types.shape[0]
+        pad_contact_types = zeros((pad_depth, contact_types.shape[1]))
+        contact_types_full = torch.cat([contact_types, pad_contact_types], dim=0)
+        pad_contact_orientations = zeros((pad_depth, contact_orientations.shape[1]))
+        contact_orientations_full = torch.cat([contact_orientations, pad_contact_orientations], dim=0)
+        
         if self.return_adj:
-            return x_full, node_mask, edge_mask, node_features_full, adj_full, y, transmission_curve, transmission_mask, contact_types, contact_orientations
+            return x_full, node_mask, edge_mask, node_features_full, adj_full, y, transmission_curve, transmission_mask, contact_types_full, contact_orientations_full
         else:
-            return x_full, node_mask, edge_mask, node_features_full, y, transmission_curve, transmission_mask, contact_types, contact_orientations
+            return x_full, node_mask, edge_mask, node_features_full, y, transmission_curve, transmission_mask, contact_types_full, contact_orientations_full
 
     def __getitem__(self, idx):
         index = self.examples[idx]

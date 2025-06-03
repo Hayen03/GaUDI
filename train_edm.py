@@ -33,7 +33,7 @@ def check_mask_correct(variables, node_mask):
             assert_correctly_masked(variable, node_mask)
 
 
-def compute_loss(model, x, h, node_mask, edge_mask):
+def compute_loss(model, x, h, node_mask, edge_mask, transmission, transmission_mask, contact_types, contact_orientations):
     # helper function to compute loss - reshape inputs, run forward pass and return the loss
     bs, n_nodes, n_dims = x.size()
     assert_correctly_masked(x, node_mask)
@@ -41,7 +41,7 @@ def compute_loss(model, x, h, node_mask, edge_mask):
 
     h = {"categorical": h, "integer": torch.zeros(0).to(x.device)}
 
-    loss = model(x, h, node_mask, edge_mask)
+    loss = model(x, h, transmission, contact_types, contact_orientations, node_mask, edge_mask, transmission_mask)
 
     # Average over batch.
     loss = loss.mean(0)
@@ -56,19 +56,24 @@ def train_epoch(epoch, model, dataloader, optimizer, args, writer, gradnorm_queu
     losses = []
     grad_norms = []
     with tqdm(dataloader, unit="batch", desc=f"Train {epoch}") as tepoch:
-        for i, (x, node_mask, edge_mask, node_features, y) in enumerate(tepoch):
+        for i, (x, node_mask, edge_mask, node_features, y, transmission, transmission_mask, contact_types, contact_orientations) in enumerate(tepoch):
             # prepare data - send to device, reshape, etc.
             x = x.to(args.device)
             node_mask = node_mask.to(args.device).unsqueeze(2)
             edge_mask = edge_mask.to(args.device)
             h = node_features.to(args.device)
+            # prepare extra data
+            transmission = transmission.to(args.device)
+            transmission_mask = transmission_mask.to(args.device).unsqueeze(2)
+            contact_types = contact_types.to(args.device)
+            contact_orientations = contact_orientations.to(args.device)
 
             x = remove_mean_with_mask(x, node_mask)
             check_mask_correct([x, h], node_mask)
             assert_mean_zero_with_mask(x, node_mask)
 
             # forward pass
-            loss = compute_loss(model, x, h, node_mask, edge_mask)
+            loss = compute_loss(model, x, h, node_mask, edge_mask, transmission, transmission_mask, contact_types, contact_orientations)
 
             # backprop
             optimizer.zero_grad()
@@ -100,19 +105,24 @@ def val_epoch(tag, epoch, model, nodes_dist, prop_dist, dataloader, args, writer
         start_time = time()
         losses = []
         with tqdm(dataloader, unit="batch", desc=f"{tag} {epoch}") as tepoch:
-            for i, (x, node_mask, edge_mask, node_features, y) in enumerate(tepoch):
+            for i, (x, node_mask, edge_mask, node_features, y, transmission, transmission_mask, contact_types, contact_orientations) in enumerate(tepoch):
                 # prepare data - send to device, reshape, etc.
                 x = x.to(args.device)
                 node_mask = node_mask.to(args.device).unsqueeze(2)
                 edge_mask = edge_mask.to(args.device)
                 h = node_features.to(args.device)
+                # prepare extra data
+                transmission = transmission.to(args.device)
+                transmission_mask = transmission_mask.to(args.device)
+                contact_types = contact_types.to(args.device)
+                contact_orientations = contact_orientations.to(args.device)
 
                 x = remove_mean_with_mask(x, node_mask)
                 check_mask_correct([x, h], node_mask)
                 assert_mean_zero_with_mask(x, node_mask)
 
                 # forward pass
-                loss = compute_loss(model, x, h, node_mask, edge_mask)
+                loss = compute_loss(model, x, h, node_mask, edge_mask, transmission, transmission_mask, contact_types, contact_orientations)
 
                 losses.append(loss.item())
 
