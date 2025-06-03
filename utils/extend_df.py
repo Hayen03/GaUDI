@@ -198,7 +198,7 @@ def gen_xyz(adj_matrix):
 			edges[e] = horaire
 		#print(f"\edges: {edges}")
    
-	return coords, edges.keys()
+	return [c.tolist() for c in coords], edges.keys()
 
 def find_connected_cycle(cycles, edges):
 	"""
@@ -230,7 +230,7 @@ def gen_mol(adj_matrix):
     """
     coords, edges = gen_xyz(adj_matrix)
     mol = Mol(list(map(lambda c: ("C", c[0], c[1], c[2]), coords)))
-    return mol, edges
+    return mol, list(edges)
 
 def get_contact_and_rotation(knot, contact):
 	"""
@@ -288,7 +288,7 @@ def get_contacts_and_rotations(knots, contact):
 
 def prepare_transmission_curve(trans, trans_min_x, trans_max_x, tot_min_x, tot_max_x, tot_min_y, tot_max_y):
 	"""
-	Prepare the transmission curve by padding and normalizing it and return the padded curve and the mask
+	Prepare the transmission curve by padding it and return the padded curve and the mask
 	"""
 	#print(f"trans_min_x: {trans_min_x}, tot_min_x: {tot_min_x}")
 	pad_before = int(np.ceil(abs(trans_min_x - tot_min_x)/TRANSMISSION_STEP))
@@ -296,6 +296,6 @@ def prepare_transmission_curve(trans, trans_min_x, trans_max_x, tot_min_x, tot_m
 	pad_after = l - len(trans) - pad_before
 	#print(f"pad_before: {pad_before}, pad_after: {pad_after}, l: {l}")
 	mask = np.pad(np.ones(len(trans)), (pad_before, pad_after))
-	norm = np.max([np.abs(tot_min_y), np.abs(tot_max_y)])
-	padded_trans = np.pad(trans/norm, (pad_before, pad_after))
+	#norm = np.max([np.abs(tot_min_y), np.abs(tot_max_y)])
+	padded_trans = np.pad(trans, (pad_before, pad_after))
 	return padded_trans, mask

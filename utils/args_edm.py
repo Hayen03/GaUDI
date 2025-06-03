@@ -51,4 +51,4 @@ class Args_EDM(argparse.ArgumentParser):
         self.add_argument("--save_dir", type=str, default="summary/")
         
         # Force calculation
-        self.add_argument("--force_calc", type=bool, default=True)
+        self.add_argument("--force_calc", type=bool, default=False)

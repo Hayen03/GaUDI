@@ -26,11 +26,21 @@ def draw_mol(coords, edges, smiles=None):
     plt.show()
     return
 
+def draw_transmission_curve(data, minx, maxx):
+    X = np.linspace(minx, maxx, len(data))
+    fig = plt.figure()
+    ax = fig.add_subplot()
+    ax.plot(X, data, color="black")
+    ax.set_xlabel("Energy (eV)")
+    ax.set_ylabel("Transmission")
+    ax.set_title("Transmission Curve")
+    plt.show()
+
 def main(args):
     train_loader, val_loader, test_loader = create_data_loaders(args)
     l = train_loader.dataset.df.shape[0]
     
-    for _ in range(20):
+    for _ in range(0):
         row = train_loader.dataset.df.iloc[random.randint(0, l)]
         #print(f"Smile: {row["smiles"]}")
         adj_matrix = row[DFKeys.ADJ_MATRIX]
@@ -39,6 +49,7 @@ def main(args):
         #print(list(map(lambda c: c[:], coords)))
         #print(edges)
         draw_mol(coords, edges, row["smiles"])
+        draw_transmission_curve(row[DFKeys.TRANSMISSIONS], row[DFKeys.MIN_TRANS_X], row[DFKeys.MAX_TRANS_X])
         
     print(train_loader.dataset[random.randint(0, l)])
     return

@@ -174,8 +174,9 @@ class AromaticDataset(Dataset):
             orientation = [k.orientation for k in knots]
             contact_types, contact_orientations = get_contacts_and_rotations(knots, df_row[DFKeys.CONTACTS])
             contact_types = one_hot(torch.tensor(contact_types), num_classes=len(CONTACT_TYPES)).float()
-            contact_orientations = torch.tensor(contact_orientations).float()
+            contact_orientations = torch.tensor([co.tolist() for co in contact_orientations]).float()
             torch.save([x, adj, node_features, orientation, contact_types, contact_orientations], preprocessed_path)
+            
         return x, adj, node_features, orientation, contact_types, contact_orientations
 
     def get_atoms(self, df_row):
@@ -200,6 +201,11 @@ class AromaticDataset(Dataset):
         return x, adj, node_features
 
     def get_all(self, df_row):
+        """
+        Returns: x_full, node_mask, edge_mask, node_features_full, adj_full, y, transmission_curve, transmission_mask, contact_types, contact_orientations
+        of x_full, node_mask, edge_mask, node_features_full, y, transmission_curve, transmission_mask, contact_types, contact_orientations
+        depending on if self.return_adj is True or False
+        """
         # extract targets
         y = torch.tensor(
             df_row[self.target_features].values.astype(np.float32), dtype=DTYPE
@@ -220,8 +226,8 @@ class AromaticDataset(Dataset):
             self.transmission_min_y, 
             self.transmission_max_y,
         )
-        transmission_curve = torch.tensor(transmission_curve)
-        transmission_mask = torch.tensor(transmission_mask)
+        transmission_curve = torch.tensor(transmission_curve).float()
+        transmission_mask = torch.tensor(transmission_mask).float()
 
         if self.orientation:
             # adjust to max nodes shape
