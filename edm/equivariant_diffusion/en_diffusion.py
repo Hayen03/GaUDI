@@ -15,6 +15,7 @@ from torch.utils.checkpoint import checkpoint
 from edm.equivariant_diffusion.utils import remove_mean_with_mask
 from tqdm import tqdm
 
+from utils.extend_df import CONTACT_TYPES
 
 # Defining some useful util functions.
 def expm1(x: torch.Tensor) -> torch.Tensor:
@@ -286,6 +287,7 @@ class EnVariationalDiffusion(torch.nn.Module):
         dynamics: models.EGNN_dynamics,
         in_node_nf: int,
         n_dims: int,
+        in_node_trans: int, # length of transmission vector
         timesteps: int = 1000,
         parametrization="eps",
         noise_schedule="learned",
@@ -321,6 +323,7 @@ class EnVariationalDiffusion(torch.nn.Module):
 
         self.in_node_nf = in_node_nf
         self.n_dims = n_dims
+        self.in_node_trans = in_node_trans
         self.num_classes = self.in_node_nf - self.include_charges
 
         self.T = timesteps
@@ -349,8 +352,8 @@ class EnVariationalDiffusion(torch.nn.Module):
                 f"1 / norm_value = {1. / max_norm_value}"
             )
 
-    def phi(self, x, t, node_mask, edge_mask, context):
-        net_out = self.dynamics._forward(t, x, node_mask, edge_mask, context)
+    def phi(self, x, t, transmission, contacts, node_mask, edge_mask, transmission_mask, context):
+        net_out = self.dynamics._forward(t, x, transmission, contacts, node_mask, edge_mask, transmission_mask, context)
 
         return net_out
 
@@ -677,16 +680,35 @@ class EnVariationalDiffusion(torch.nn.Module):
         eps = self.sample_combined_position_feature_noise(
             n_samples=x.size(0), n_nodes=x.size(1), node_mask=node_mask
         )
+        #print(transmission_mask.size())
+        eps_trans = utils.sample_gaussian_with_mask(
+            size=(transmission_mask.size(0), transmission_mask.size(1)),
+            node_mask=transmission_mask.squeeze(),
+            device=transmission_mask.device,
+            std=1.0,
+        )
+        eps_contacts = self.sample_contact_noise(
+            n_samples=x.size(0), n_nodes=x.size(1), node_mask=node_mask
+        )
 
         # Concatenate x, h[integer] and h[categorical].
+        # Also add contact types and orientations
         xh = torch.cat([x, h["categorical"], h["integer"]], dim=2)
+        contacts = torch.cat([contact_types, contact_orientations], dim=2)
         # Sample z_t given x, h for timestep t, from q(z_t | x, h)
         z_t = alpha_t * xh + sigma_t * eps
+        z_trans = torch.add(alpha_t.squeeze(2) * transmission, sigma_t.squeeze(2) * eps_trans)
+        z_contacts = torch.add(alpha_t * contacts, sigma_t * eps_contacts)
 
         diffusion_utils.assert_mean_zero_with_mask(z_t[:, :, : self.n_dims], node_mask)
 
+        #print(f"xh {xh.size()}, eps {eps.size()}, z_t {z_t.size()}")
+        #print(f"transmission {transmission.size()}, z {z_trans.size()}, eps {eps_trans.size()}")
+        #print(f"contacts {contacts.size()}, z_contacts {z_contacts.size()}, eps_contacts {eps_contacts.size()}")
+        #print(f"alpha_t {alpha_t.size()}, sigma_t {sigma_t.size()}")
+
         # Neural net prediction.
-        net_out = self.phi(z_t, t, node_mask, edge_mask, context)
+        net_out = self.phi(z_t, t, z_trans, z_contacts, node_mask, edge_mask, transmission_mask, context)
 
         # Compute the error.
         error = self.compute_error(net_out, gamma_t, eps)
@@ -726,9 +748,20 @@ class EnVariationalDiffusion(torch.nn.Module):
             eps_0 = self.sample_combined_position_feature_noise(
                 n_samples=x.size(0), n_nodes=x.size(1), node_mask=node_mask
             )
+            eps_trans_0 = utils.sample_gaussian_with_mask(
+                size=(transmission_mask.size(0), transmission_mask.size(1)),
+                node_mask=transmission_mask.squeeze(),
+                device=transmission_mask.device,
+                std=1.0,
+            )
+            eps_contacts_0 = self.sample_contact_noise(
+                n_samples=x.size(0), n_nodes=x.size(1), node_mask=node_mask
+            )
             z_0 = alpha_0 * xh + sigma_0 * eps_0
+            z_trans_0 = alpha_0.squeeze(2) * transmission + sigma_0.squeeze(2) * eps_trans_0
+            z_contacts_0 = alpha_0 * contacts + sigma_0 * eps_contacts_0
 
-            net_out = self.phi(z_0, t_zeros, node_mask, edge_mask, context)
+            net_out = self.phi(z_0, t_zeros, z_trans_0, z_contacts_0, node_mask, edge_mask, transmission_mask, context)
 
             loss_term_0 = -self.log_pxh_given_z0_without_constants(
                 x, h, z_0, gamma_0, eps_0, net_out, node_mask
@@ -953,6 +986,27 @@ class EnVariationalDiffusion(torch.nn.Module):
             std=std,
         )
         z = torch.cat([z_x, z_h], dim=2)
+        return z
+    def sample_contact_noise(
+        self, n_samples, n_nodes, node_mask, std=1.0
+    ):
+        """
+        Samples standard normal noise for contact types and orientations.
+        """
+        # contact types and orientations noise
+        z_c = utils.sample_gaussian_with_mask(
+            size=(n_samples, n_nodes, len(CONTACT_TYPES)),
+            device=node_mask.device,
+            node_mask=node_mask,
+            std=std,
+        )
+        z_o = utils.sample_gaussian_with_mask(
+            size=(n_samples, n_nodes, self.n_dims),
+            device=node_mask.device,
+            node_mask=node_mask,
+            std=std,
+        )
+        z = torch.cat([z_c, z_o], dim=2)
         return z
 
     @torch.no_grad()

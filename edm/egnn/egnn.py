@@ -194,7 +194,7 @@ class EGNN(nn.Module):
 
         self.to(self.device)
 
-    def forward(self, h, x, edges, edge_attr=None, node_mask=None, edge_mask=None):
+    def forward(self, h, x, edges, transmission, contacts, edge_attr=None, node_mask=None, edge_mask=None, transmission_mask=None):
         # Edit Emiel: Remove velocity as input
         edge_attr = torch.sum((x[edges[0]] - x[edges[1]]) ** 2, dim=1, keepdim=True)
         h = self.embedding(h)
@@ -329,7 +329,7 @@ class GNN(nn.Module):
             )
         self.to(self.device)
 
-    def forward(self, h, edges, edge_attr=None, node_mask=None, edge_mask=None):
+    def forward(self, h, edges, transmission, contacts, edge_attr=None, node_mask=None, edge_mask=None, transmission_mask=None):
         # Edit Emiel: Remove velocity as input
         h = self.embedding(h)
         for i in range(0, self.n_layers):

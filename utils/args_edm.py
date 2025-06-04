@@ -15,7 +15,7 @@ class Args_EDM(argparse.ArgumentParser):
         self.add_argument("--name", type=str, default="cata-test")
         self.add_argument("--restore", type=bool, default=None)
         self.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
-        self.add_argument("--num_epochs", type=int, default=1000)
+        self.add_argument("--num_epochs", type=int, default=1)
         self.add_argument("--normalize", type=bool, default=True)
         self.add_argument("--num-workers", type=int, default=16)
         self.add_argument("--batch-size", type=int, default=256)

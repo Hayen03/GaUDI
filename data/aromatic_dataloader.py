@@ -20,7 +20,7 @@ from utils.args_edm import Args_EDM
 from utils.ring_graph import get_rings, get_rings_adj
 from utils.molgraph import get_connectivity_matrix, get_edges
 
-from utils.extend_df import extend_df, DFKeys, develop_df, gen_mol, get_contacts_and_rotations, CONTACT_TYPES, prepare_transmission_curve
+from utils.extend_df import TRANSMISSION_STEP, extend_df, DFKeys, develop_df, gen_mol, get_contacts_and_rotations, CONTACT_TYPES, prepare_transmission_curve
 
 DTYPE = torch.float32
 INT_DTYPE = torch.int8
@@ -60,6 +60,7 @@ class AromaticDataset(Dataset):
         self.transmission_max_x = transmission_bounds[1] if transmission_bounds is not None else None
         self.transmission_min_y = transmission_bounds[2] if transmission_bounds is not None else None
         self.transmission_max_y = transmission_bounds[3] if transmission_bounds is not None else None
+        self.transmission_length = int(np.ceil((self.transmission_max_x - self.transmission_min_x)/TRANSMISSION_STEP)) + 1
 
         self.task = task
         self.rings_graph = args.rings_graph
@@ -220,11 +221,7 @@ class AromaticDataset(Dataset):
         transmission_curve, transmission_mask = prepare_transmission_curve(
             df_row[DFKeys.TRANSMISSIONS], 
             df_row[DFKeys.MIN_TRANS_X], 
-            df_row[DFKeys.MIN_TRANS_X], 
-            self.transmission_min_x, 
-            self.transmission_max_x, 
-            self.transmission_min_y, 
-            self.transmission_max_y,
+            self,
         )
         transmission_curve = torch.tensor(transmission_curve).float()
         transmission_mask = torch.tensor(transmission_mask).float()

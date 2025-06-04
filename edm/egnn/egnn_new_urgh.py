@@ -7,6 +7,7 @@ class GCL(nn.Module):
     def __init__(
         self,
         input_nf,
+        input_trans_nf,
         output_nf,
         hidden_nf,
         normalization_factor,
@@ -16,8 +17,7 @@ class GCL(nn.Module):
         act_fn=nn.SiLU(),
         attention=False,
     ):
-        super(GCL, self).__init__()
-        input_edge = input_nf * 2
+        input_edge = input_nf * 2 + input_trans_nf
         self.normalization_factor = normalization_factor
         self.aggregation_method = aggregation_method
         self.attention = attention
@@ -33,14 +33,13 @@ class GCL(nn.Module):
             nn.Linear(hidden_nf + input_nf + nodes_att_dim, hidden_nf),
             act_fn,
             nn.Linear(hidden_nf, output_nf),
-            # act_fn,
         )
 
         if self.attention:
             self.att_mlp = nn.Sequential(nn.Linear(hidden_nf, 1), nn.Sigmoid())
 
     def edge_model(self, source, target, edge_attr, edge_mask):
-        if edge_attr is None:  # Unused.
+        if edge_attr is None:
             out = torch.cat([source, target], dim=1)
         else:
             out = torch.cat([source, target, edge_attr], dim=1)
@@ -100,9 +99,6 @@ class EquivariantUpdate(nn.Module):
         tanh=False,
         coords_range=10.0,
     ):
-        super(EquivariantUpdate, self).__init__()
-        self.tanh = tanh
-        self.coords_range = coords_range
         input_edge = hidden_nf * 2 + edges_in_d
         layer = nn.Linear(hidden_nf, 1, bias=False)
         torch.nn.init.xavier_uniform_(layer.weight, gain=0.001)
@@ -159,6 +155,7 @@ class EquivariantBlock(nn.Module):
     def __init__(
         self,
         hidden_nf,
+        in_trans,
         edge_feat_nf=2,
         device="cpu",
         act_fn=nn.SiLU(),
@@ -172,7 +169,6 @@ class EquivariantBlock(nn.Module):
         normalization_factor=100,
         aggregation_method="sum",
     ):
-        super(EquivariantBlock, self).__init__()
         self.hidden_nf = hidden_nf
         self.device = device
         self.n_layers = n_layers
@@ -188,6 +184,7 @@ class EquivariantBlock(nn.Module):
                 "gcl_%d" % i,
                 GCL(
                     self.hidden_nf,
+                    in_trans,
                     self.hidden_nf,
                     self.hidden_nf,
                     edges_in_d=edge_feat_nf,
@@ -211,12 +208,11 @@ class EquivariantBlock(nn.Module):
         )
         self.to(self.device)
 
-    def forward(self, h, x, edge_index, node_mask=None, edge_mask=None, edge_attr=None):
-        # Edit Emiel: Remove velocity as input
+    def forward(self, h, x, edge_index, transmission, contacts, node_mask=None, edge_mask=None, edge_attr=None):
         distances, coord_diff = coord2diff(x, edge_index, self.norm_constant)
         if self.sin_embedding is not None:
             distances = self.sin_embedding(distances)
-        edge_attr = torch.cat([distances, edge_attr], dim=1)
+        edge_attr = torch.cat([distances, edge_attr, transmission, contacts], dim=1)
         for i in range(0, self.n_layers):
             h, _ = self._modules["gcl_%d" % i](
                 h,
@@ -229,7 +225,6 @@ class EquivariantBlock(nn.Module):
             h, x, edge_index, coord_diff, edge_attr, node_mask, edge_mask
         )
 
-        # Important, the bias of the last linear might be non-zero
         if node_mask is not None:
             h = h * node_mask
         return h, x
@@ -239,10 +234,9 @@ class EGNN(nn.Module):
     def __init__(
         self,
         in_node_nf,
+        in_trans,
         in_edge_nf,
         hidden_nf,
-        in_trans,
-        n_dim=3,
         device="cpu",
         act_fn=nn.SiLU(),
         n_layers=3,
@@ -257,9 +251,9 @@ class EGNN(nn.Module):
         normalization_factor=100,
         aggregation_method="sum",
     ):
-        super(EGNN, self).__init__()
         if out_node_nf is None:
             out_node_nf = in_node_nf
+        self.in_trans = in_trans
         self.hidden_nf = hidden_nf
         self.device = device
         self.n_layers = n_layers
@@ -267,7 +261,6 @@ class EGNN(nn.Module):
         self.norm_diff = norm_diff
         self.normalization_factor = normalization_factor
         self.aggregation_method = aggregation_method
-        self.n_dim = n_dim
 
         if sin_embedding:
             self.sin_embedding = SinusoidsEmbeddingNew()
@@ -276,25 +269,14 @@ class EGNN(nn.Module):
             self.sin_embedding = None
             edge_feat_nf = 2
 
-        # Pour le traitement de la fonction de transmission
-        self.transmission_embed = nn.Sequential(
-            nn.Linear(in_trans, hidden_nf),
-            nn.SiLU(),
-            nn.Linear(hidden_nf, hidden_nf),
-        )
-        self.transmission_out = nn.Sequential(
-            nn.Linear(hidden_nf, hidden_nf),
-            nn.SiLU(),
-            nn.Linear(hidden_nf, in_trans),
-        )
-
-        self.embedding = nn.Linear(in_node_nf + len(CONTACT_TYPES) + n_dim + hidden_nf, self.hidden_nf)
-        self.embedding_out = nn.Linear(self.hidden_nf, out_node_nf + len(CONTACT_TYPES) + n_dim + self.hidden_nf)
+        self.embedding = nn.Linear(in_node_nf, self.hidden_nf)
+        self.embedding_out = nn.Linear(self.hidden_nf, out_node_nf)
         for i in range(0, n_layers):
             self.add_module(
                 "e_block_%d" % i,
                 EquivariantBlock(
                     hidden_nf,
+                    in_trans,
                     edge_feat_nf=edge_feat_nf,
                     device=device,
                     act_fn=act_fn,
@@ -312,62 +294,26 @@ class EGNN(nn.Module):
         self.to(self.device)
 
     def forward(self, h, x, edge_index, transmission, contacts, node_mask=None, edge_mask=None, transmission_mask=None):
-        # Edit Emiel: Remove velocity as input
         distances, _ = coord2diff(x, edge_index)
         if self.sin_embedding is not None:
             distances = self.sin_embedding(distances)
-            
-        # Embed transmission
-        # 
-        trans_feat = self.transmission_embed(transmission)
-        #print(f"trans_feat: {trans_feat.size()}")
-        #print(f"contacts: {contacts.size()}")
-        #print(f"h: {h.size()}")
-        #print(f"transmission: {transmission.size()}")
-        #print(f"Node mask: {node_mask.size()}")
-        # Récupération de la taille du batch et du nombre de noeuds
-        bs = transmission.size(0)
-        node_max = h.size(0)//bs
-        # Broadcast la transmission pour que ça fit avec le nombre de noeuds et que l'on puisse concaténer avec le reste des données
-        trans_feat = trans_feat.repeat_interleave(repeats=node_max, dim=0) # [ds x node_max, hidden_nf]
-        #print(f"trans_feat: {trans_feat.size()}")
-        
-        h_full = torch.cat([h, contacts, trans_feat], dim=-1)
-        #print(f"h_full: {h_full.size()}")
-            
-        h1 = self.embedding(h_full)
+        h1 = self.embedding(h)
         for i in range(0, self.n_layers):
             h1, x = self._modules["e_block_%d" % i](
                 h1,
                 x,
                 edge_index,
+                transmission,
+                contacts,
                 node_mask=node_mask,
                 edge_mask=edge_mask,
                 edge_attr=distances,
             )
-        
-        # Important, the bias of the last linear might be non-zero
+
         h3 = self.embedding_out(h1)
-        print(f"h3: {h3.size()}")
         if node_mask is not None:
             h3 = h3 * node_mask
-        
-        
-        # unpacking des données de contacts et de transmission
-        # Ça permet de laisser le code original de GaUDI intact
-        h3_ = h3[:, -self.hidden_nf:].view(bs, node_max, -1)
-        node_mask_ = node_mask.view(bs, node_max, 1)
-        
-        graph_feat = (h3_ * node_mask_).sum(dim=1) / node_mask_.sum(dim=1)
-        transmission_pred = self.transmission_out(graph_feat)
-        
-        contact_orientations_pred = h3[:, -self.n_dim - self.hidden_nf:-self.hidden_nf].view(bs, node_max, -1)
-        contact_types_pred = h3[:, -len(CONTACT_TYPES) - self.n_dim - self.hidden_nf:-self.n_dim - self.hidden_nf].view(bs, node_max, -1)
-        h3 = h3[:, :-self.hidden_nf-len(CONTACT_TYPES)-self.n_dim]
-        
-        if (h3 > 1e10).any():
-            print()
-        return h3, x, transmission_pred, contact_types_pred, contact_orientations_pred
+        return h3, x
 
 
 class GNN(nn.Module):
@@ -384,13 +330,11 @@ class GNN(nn.Module):
         normalization_factor=1,
         out_node_nf=None,
     ):
-        super(GNN, self).__init__()
         if out_node_nf is None:
             out_node_nf = in_node_nf
         self.hidden_nf = hidden_nf
         self.device = device
         self.n_layers = n_layers
-        ### Encoder
         self.embedding = nn.Linear(in_node_nf, self.hidden_nf)
         self.embedding_out = nn.Linear(self.hidden_nf, out_node_nf)
         for i in range(0, n_layers):
@@ -398,6 +342,7 @@ class GNN(nn.Module):
                 "gcl_%d" % i,
                 GCL(
                     self.hidden_nf,
+                    0,
                     self.hidden_nf,
                     self.hidden_nf,
                     normalization_factor=normalization_factor,
@@ -410,7 +355,6 @@ class GNN(nn.Module):
         self.to(self.device)
 
     def forward(self, h, edges, edge_attr=None, node_mask=None, edge_mask=None):
-        # Edit Emiel: Remove velocity as input
         h = self.embedding(h)
         for i in range(0, self.n_layers):
             h, _ = self._modules["gcl_%d" % i](
@@ -418,7 +362,6 @@ class GNN(nn.Module):
             )
         h = self.embedding_out(h)
 
-        # Important, the bias of the last linear might be non-zero
         if node_mask is not None:
             h = h * node_mask
         return h
@@ -426,7 +369,6 @@ class GNN(nn.Module):
 
 class SinusoidsEmbeddingNew(nn.Module):
     def __init__(self, max_res=15.0, min_res=15.0 / 2000.0, div_factor=4):
-        super().__init__()
         self.n_frequencies = int(math.log(max_res / min_res, div_factor)) + 1
         self.frequencies = (
             2 * math.pi * div_factor ** torch.arange(self.n_frequencies) / max_res
@@ -452,11 +394,8 @@ def coord2diff(x, edge_index, norm_constant=1):
 def unsorted_segment_sum(
     data, segment_ids, num_segments, normalization_factor, aggregation_method: str
 ):
-    """Custom PyTorch op to replicate TensorFlow's `unsorted_segment_sum`.
-    Normalization: 'sum' or 'mean'.
-    """
     result_shape = (num_segments, data.size(1))
-    result = data.new_full(result_shape, 0)  # Init empty result tensor.
+    result = data.new_full(result_shape, 0)
     segment_ids = segment_ids.unsqueeze(-1).expand(-1, data.size(1))
     result.scatter_add_(0, segment_ids, data)
     if aggregation_method == "sum":

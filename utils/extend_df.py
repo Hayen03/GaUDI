@@ -286,13 +286,13 @@ def get_contacts_and_rotations(knots, contact):
 		rotations.append(rotation)
 	return contacts, rotations
 
-def prepare_transmission_curve(trans, trans_min_x, trans_max_x, tot_min_x, tot_max_x, tot_min_y, tot_max_y):
+def prepare_transmission_curve(trans, trans_min_x, dataset):
 	"""
 	Prepare the transmission curve by padding it and return the padded curve and the mask
 	"""
 	#print(f"trans_min_x: {trans_min_x}, tot_min_x: {tot_min_x}")
-	pad_before = int(np.ceil(abs(trans_min_x - tot_min_x)/TRANSMISSION_STEP))
-	l = int(np.ceil((tot_max_x - tot_min_x)/TRANSMISSION_STEP)) + 1
+	pad_before = int(np.ceil(abs(trans_min_x - dataset.transmission_min_x)/TRANSMISSION_STEP))
+	l = dataset.transmission_length
 	pad_after = l - len(trans) - pad_before
 	#print(f"pad_before: {pad_before}, pad_after: {pad_after}, l: {l}")
 	mask = np.pad(np.ones(len(trans)), (pad_before, pad_after))

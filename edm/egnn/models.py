@@ -4,11 +4,14 @@ from edm.egnn.egnn_new import EGNN, GNN
 from edm.equivariant_diffusion.utils import remove_mean, remove_mean_with_mask
 import numpy as np
 
+from utils.extend_df import CONTACT_TYPES
+
 
 class EGNN_dynamics(nn.Module):
     def __init__(
         self,
         in_node_nf,
+        in_node_trans: int, # length of transmission vector
         context_node_nf=0,
         n_dims=3,
         hidden_nf=64,
@@ -34,6 +37,7 @@ class EGNN_dynamics(nn.Module):
             self.egnn = EGNN(
                 in_node_nf=in_node_nf + context_node_nf,
                 in_edge_nf=1,
+                in_trans=in_node_trans,
                 hidden_nf=hidden_nf,
                 device=device,
                 act_fn=act_fn,
@@ -50,7 +54,7 @@ class EGNN_dynamics(nn.Module):
             self.in_node_nf = in_node_nf
         elif mode == "gnn_dynamics":
             self.gnn = GNN(
-                in_node_nf=in_node_nf + context_node_nf + 3,
+                in_node_nf=in_node_nf,
                 in_edge_nf=0,
                 hidden_nf=hidden_nf,
                 out_node_nf=3 + in_node_nf,
@@ -80,13 +84,23 @@ class EGNN_dynamics(nn.Module):
     def unwrap_forward(self):
         return self._forward
 
-    def _forward(self, t, xh, node_mask, edge_mask, context):
+    def _forward(self, t, xh, transmission, contacts, node_mask, edge_mask, transmission_mask, context):
         bs, n_nodes, dims = xh.shape
+        trans_len = transmission.size(1)
+        #print(f"BS {bs}, trans_len {trans_len}, prod {bs * trans_len}, size_0 {transmission.size(0)}, size_2 {transmission.size(2)}, size_1 {transmission.size(1)}, full {transmission.size()}")
         h_dims = dims - self.n_dims
         edges = self.get_adj_matrix(n_nodes, bs, self.device)
         edges = [x.to(self.device) for x in edges]
         node_mask = node_mask.view(bs * n_nodes, 1)
         edge_mask = edge_mask.view(bs * n_nodes * n_nodes, 1)
+        
+        # Reshape the transmission mask
+        #transmission_mask = transmission_mask.view(bs*trans_len, 1)
+        # Process transmission data
+        #transmission = transmission.view(bs * trans_len, -1) * transmission_mask
+        # Process contacts information
+        contacts = contacts.view(bs * n_nodes, -1)
+        
         xh = xh.view(bs * n_nodes, -1).clone() * node_mask
         x = xh[:, 0 : self.n_dims].clone()
         if h_dims == 0:
@@ -110,15 +124,15 @@ class EGNN_dynamics(nn.Module):
             h = torch.cat([h, context], dim=1)
 
         if self.mode == "egnn_dynamics":
-            h_final, x_final = self.egnn(
-                h, x, edges, node_mask=node_mask, edge_mask=edge_mask
+            h_final, x_final, transmission_final, contact_types_final, contact_orientations_final = self.egnn(
+                h, x, edges, transmission, contacts, node_mask=node_mask, edge_mask=edge_mask, transmission_mask=transmission_mask
             )
             vel = (
                 x_final - x
             ) * node_mask  # This masking operation is redundant but just in case
         elif self.mode == "gnn_dynamics":
             xh = torch.cat([x, h], dim=1)
-            output = self.gnn(xh, edges, node_mask=node_mask)
+            output = self.gnn(xh, edges, transmission, contacts, node_mask=node_mask, transmission_mask=transmission_mask)
             vel = output[:, 0:3] * node_mask
             h_final = output[:, 3:]
 
