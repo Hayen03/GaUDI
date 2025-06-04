@@ -288,8 +288,13 @@ class EGNN(nn.Module):
             nn.Linear(hidden_nf, in_trans),
         )
 
+        # TODO Ajouter un embedding séparé pour les contacts
+        self.contact_types_out = nn.Linear(hidden_nf, len(CONTACT_TYPES))
+        self.contact_orientations_out = nn.Linear(hidden_nf, self.n_dim)
+
         self.embedding = nn.Linear(in_node_nf + len(CONTACT_TYPES) + n_dim + hidden_nf, self.hidden_nf)
-        self.embedding_out = nn.Linear(self.hidden_nf, out_node_nf + len(CONTACT_TYPES) + n_dim + self.hidden_nf)
+        self.embedding_out = nn.Linear(self.hidden_nf, out_node_nf)
+        ##  + len(CONTACT_TYPES) + n_dim + self.hidden_nf
         for i in range(0, n_layers):
             self.add_module(
                 "e_block_%d" % i,
@@ -348,22 +353,25 @@ class EGNN(nn.Module):
         
         # Important, the bias of the last linear might be non-zero
         h3 = self.embedding_out(h1)
-        print(f"h3: {h3.size()}")
+        #print(f"h3: {h3.size()}")
         if node_mask is not None:
             h3 = h3 * node_mask
         
+        # Prédiction des contacts
+        contact_types_pred = self.contact_types_out(h1)
+        contact_orientations_pred = self.contact_orientations_out(h1)
         
         # unpacking des données de contacts et de transmission
         # Ça permet de laisser le code original de GaUDI intact
-        h3_ = h3[:, -self.hidden_nf:].view(bs, node_max, -1)
+        h1_ = h1.view(bs, node_max, -1)
         node_mask_ = node_mask.view(bs, node_max, 1)
         
-        graph_feat = (h3_ * node_mask_).sum(dim=1) / node_mask_.sum(dim=1)
+        graph_feat = (h1_ * node_mask_).sum(dim=1) / node_mask_.sum(dim=1)
         transmission_pred = self.transmission_out(graph_feat)
         
-        contact_orientations_pred = h3[:, -self.n_dim - self.hidden_nf:-self.hidden_nf].view(bs, node_max, -1)
-        contact_types_pred = h3[:, -len(CONTACT_TYPES) - self.n_dim - self.hidden_nf:-self.n_dim - self.hidden_nf].view(bs, node_max, -1)
-        h3 = h3[:, :-self.hidden_nf-len(CONTACT_TYPES)-self.n_dim]
+        #contact_orientations_pred = h3[:, -self.n_dim - self.hidden_nf:-self.hidden_nf].view(bs, node_max, -1)
+        #contact_types_pred = h3[:, -len(CONTACT_TYPES) - self.n_dim - self.hidden_nf:-self.n_dim - self.hidden_nf].view(bs, node_max, -1)
+        #h3 = h3[:, :-self.hidden_nf-len(CONTACT_TYPES)-self.n_dim]
         
         if (h3 > 1e10).any():
             print()
