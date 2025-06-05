@@ -16,6 +16,7 @@ from edm.equivariant_diffusion.utils import remove_mean_with_mask
 from tqdm import tqdm
 
 from utils.extend_df import CONTACT_TYPES
+from utils.logger import Logger
 
 # Defining some useful util functions.
 def expm1(x: torch.Tensor) -> torch.Tensor:
@@ -129,6 +130,37 @@ def gaussian_KL_for_dimension(q_mu, q_sigma, p_mu, p_sigma, d):
         - 0.5 * d
     )
 
+def transmission_error(pred, noise, mask):
+    """
+    Calcule l'erreur entre la prédiction de transmission et la valeur théorique
+    """
+    #print(f"TRANSMISSION pred {pred.shape}, noise {noise.shape}, mask {mask.shape}")
+    error = (pred - noise) ** 2
+    return sum_except_batch(error * mask) / sum_except_batch(mask)
+
+def contact_orientations_error(pred, noise, mask):
+    """
+    Calcule l'erreur entre la prédiction de contact orientation et la valeur théorique
+    """
+    #print(f"ORIENTATIONS pred {pred.shape}, noise {noise.shape}, mask {mask.shape}")
+    error = (pred.view(noise.shape) - noise) ** 2
+    return sum_except_batch(error * mask) / sum_except_batch(mask)
+
+def one_hot_to_indices(one_hot, mask):
+    """
+    Convert a one-hot encoded tensor to indices.
+    """
+    indices = torch.argmax(one_hot, dim=-1)
+    indices = indices * mask.squeeze(-1).long()
+    return indices
+def contact_types_error(pred, noise, mask):
+    """
+    Calcule l'erreur entre la prédiction de contact types et la valeur théorique
+    """
+    noise_indices = one_hot_to_indices(noise, mask)
+    #print(f"TYPES pred {pred.shape}, noise {noise.shape}, mask {mask.shape}, indices {noise_indices.shape}")
+    error = torch.nn.CrossEntropyLoss(reduction='none')(pred, noise_indices.view(-1))
+    return sum_except_batch(error.view(mask.size(0), mask.size(1), -1) * mask) / sum_except_batch(mask)
 
 class PositiveLinear(torch.nn.Module):
     """Linear layer with weights forced to be positive."""
@@ -515,6 +547,7 @@ class EnVariationalDiffusion(torch.nn.Module):
             error = sum_except_batch((eps - eps_t) ** 2) / denom
         else:
             error = sum_except_batch((eps - eps_t) ** 2)
+        
         return error
 
     def log_constants_p_x_given_z0(self, x, node_mask):
@@ -581,9 +614,12 @@ class EnVariationalDiffusion(torch.nn.Module):
             z_t[:, :, -1:] if self.include_charges else torch.zeros(0).to(z_t.device)
         )
 
+        # unpack net_out
+        xh_out = net_out
+
         # Take only part over x.
         eps_x = eps[:, :, : self.n_dims]
-        net_x = net_out[:, :, : self.n_dims]
+        net_x = xh_out[:, :, : self.n_dims]
 
         # Compute sigma_0 and rescale to the integer scale of the data.
         sigma_0 = self.sigma(gamma_0, target_tensor=z_t)
@@ -647,6 +683,8 @@ class EnVariationalDiffusion(torch.nn.Module):
     def compute_loss(self, x, h, transmission, contact_types, contact_orientations, node_mask, edge_mask, transmission_mask, context, t0_always):
         """Computes an estimator for the variational lower bound, or the simple loss (MSE)."""
 
+        Logger.log(f"\nCOMPUTE_LOSS x {x.size()}, h {h['categorical'].size()}, transmission {transmission.size()}, contact_types {contact_types.size()}, contact_orientations {contact_orientations.size()}")
+
         # This part is about whether to include loss term 0 always.
         if t0_always:
             # loss_term_0 will be computed separately.
@@ -681,18 +719,19 @@ class EnVariationalDiffusion(torch.nn.Module):
             n_samples=x.size(0), n_nodes=x.size(1), node_mask=node_mask
         )
         #print(transmission_mask.size())
-        eps_trans = utils.sample_gaussian_with_mask(
-            size=(transmission_mask.size(0), transmission_mask.size(1)),
-            node_mask=transmission_mask.squeeze(),
-            device=transmission_mask.device,
-            std=1.0,
-        )
+        #eps_trans = utils.sample_gaussian_with_mask(
+        #    size=(transmission_mask.size(0), transmission_mask.size(1)),
+        #    node_mask=transmission_mask.squeeze(),
+        #    device=transmission_mask.device,
+        #    std=1.0,
+        #)
+        # pas de bruit sur la transmission parce que l'on veut que ça guide le modèle
+        eps_trans = transmission
         eps_contacts = self.sample_contact_noise(
             n_samples=x.size(0), n_nodes=x.size(1), node_mask=node_mask
         )
 
         # Concatenate x, h[integer] and h[categorical].
-        # Also add contact types and orientations
         xh = torch.cat([x, h["categorical"], h["integer"]], dim=2)
         contacts = torch.cat([contact_types, contact_orientations], dim=2)
         # Sample z_t given x, h for timestep t, from q(z_t | x, h)
@@ -702,16 +741,22 @@ class EnVariationalDiffusion(torch.nn.Module):
 
         diffusion_utils.assert_mean_zero_with_mask(z_t[:, :, : self.n_dims], node_mask)
 
-        #print(f"xh {xh.size()}, eps {eps.size()}, z_t {z_t.size()}")
-        #print(f"transmission {transmission.size()}, z {z_trans.size()}, eps {eps_trans.size()}")
-        #print(f"contacts {contacts.size()}, z_contacts {z_contacts.size()}, eps_contacts {eps_contacts.size()}")
-        #print(f"alpha_t {alpha_t.size()}, sigma_t {sigma_t.size()}")
+        Logger.log(f"xh {xh.size()}, eps {eps.size()}, z_t {z_t.size()}")
+        Logger.log(f"transmission {transmission.size()}, z {z_trans.size()}, eps {eps_trans.size()}")
+        Logger.log(f"contacts {contacts.size()}, z_contacts {z_contacts.size()}, eps_contacts {eps_contacts.size()}")
+        Logger.log(f"alpha_t {alpha_t.size()}, sigma_t {sigma_t.size()}")
 
         # Neural net prediction.
         net_out = self.phi(z_t, t, z_trans, z_contacts, node_mask, edge_mask, transmission_mask, context)
-
+        xh_pred, transmission_pred, contact_types_pred, contact_orientations_pred = net_out
         # Compute the error.
-        error = self.compute_error(net_out, gamma_t, eps)
+        error = self.compute_error(xh_pred, gamma_t, eps)
+        error_trans = transmission_error(transmission_pred, eps_trans, transmission_mask.squeeze())
+        eps_contact_types, eps_contact_orientations = eps_contacts[:, :, :len(CONTACT_TYPES)], eps_contacts[:, :, len(CONTACT_TYPES):]
+        error_contact_orientations = contact_orientations_error(contact_orientations_pred, eps_contact_orientations, node_mask)
+        error_contact_types = contact_types_error(contact_types_pred, eps_contact_types, node_mask)
+
+        #print(f"xh {error.shape}, transmission {error_trans.shape}, contact_types {error_contact_types.shape}, contact_orientations {error_contact_orientations.shape}")
 
         if self.training and self.loss_type == "l2":
             SNR_weight = torch.ones_like(error)
@@ -719,7 +764,8 @@ class EnVariationalDiffusion(torch.nn.Module):
             # Compute weighting with SNR: (SNR(s-t) - 1) for epsilon parametrization.
             SNR_weight = (self.SNR(gamma_s - gamma_t) - 1).squeeze(1).squeeze(1)
         assert error.size() == SNR_weight.size()
-        loss_t_larger_than_zero = 0.5 * SNR_weight * error
+        w_xh, w_transmission, w_contact_types, w_contact_orientations = 0.5, 1., 1., 1.
+        loss_t_larger_than_zero = SNR_weight * (w_xh*error + w_transmission*error_trans + w_contact_types*error_contact_types + w_contact_orientations*error_contact_orientations)
 
         # The _constants_ depending on sigma_0 from the
         # cross entropy term E_q(z0 | x) [log p(x | z0)].
@@ -748,12 +794,14 @@ class EnVariationalDiffusion(torch.nn.Module):
             eps_0 = self.sample_combined_position_feature_noise(
                 n_samples=x.size(0), n_nodes=x.size(1), node_mask=node_mask
             )
-            eps_trans_0 = utils.sample_gaussian_with_mask(
-                size=(transmission_mask.size(0), transmission_mask.size(1)),
-                node_mask=transmission_mask.squeeze(),
-                device=transmission_mask.device,
-                std=1.0,
-            )
+            #eps_trans_0 = utils.sample_gaussian_with_mask(
+            #    size=(transmission_mask.size(0), transmission_mask.size(1)),
+            #    node_mask=transmission_mask.squeeze(),
+            #    device=transmission_mask.device,
+            #    std=1.0,
+            #)
+            # pas de bruit sur la transmission parce que l'on veut que ça guide le modèle
+            eps_trans_0 = transmission
             eps_contacts_0 = self.sample_contact_noise(
                 n_samples=x.size(0), n_nodes=x.size(1), node_mask=node_mask
             )
@@ -762,9 +810,10 @@ class EnVariationalDiffusion(torch.nn.Module):
             z_contacts_0 = alpha_0 * contacts + sigma_0 * eps_contacts_0
 
             net_out = self.phi(z_0, t_zeros, z_trans_0, z_contacts_0, node_mask, edge_mask, transmission_mask, context)
+            xh_pred, transmission_pred, contact_types_pred, contact_orientations_pred = net_out
 
             loss_term_0 = -self.log_pxh_given_z0_without_constants(
-                x, h, z_0, gamma_0, eps_0, net_out, node_mask
+                x, h, z_0, gamma_0, eps_0, xh_pred, node_mask
             )
 
             assert kl_prior.size() == estimator_loss_terms.size()
@@ -777,7 +826,7 @@ class EnVariationalDiffusion(torch.nn.Module):
             # Computes the L_0 term (even if gamma_t is not actually gamma_0)
             # and this will later be selected via masking.
             loss_term_0 = -self.log_pxh_given_z0_without_constants(
-                x, h, z_t, gamma_t, eps, net_out, node_mask
+                x, h, z_t, gamma_t, eps, xh_pred, node_mask
             )
 
             t_is_not_zero = 1 - t_is_zero

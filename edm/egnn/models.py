@@ -131,6 +131,7 @@ class EGNN_dynamics(nn.Module):
                 x_final - x
             ) * node_mask  # This masking operation is redundant but just in case
         elif self.mode == "gnn_dynamics":
+            # TODO gérer le gnn
             xh = torch.cat([x, h], dim=1)
             output = self.gnn(xh, edges, transmission, contacts, node_mask=node_mask, transmission_mask=transmission_mask)
             vel = output[:, 0:3] * node_mask
@@ -163,7 +164,7 @@ class EGNN_dynamics(nn.Module):
             return vel
         else:
             h_final = h_final.view(bs, n_nodes, -1)
-            return torch.cat([vel, h_final], dim=2)
+            return torch.cat([vel, h_final], dim=2), transmission_final, contact_types_final, contact_orientations_final
 
     def get_adj_matrix(self, n_nodes, batch_size, device):
         if n_nodes in self._edges_dict:
