@@ -3,6 +3,8 @@ import torch
 import math
 from utils.extend_df import CONTACT_TYPES
 
+from utils.logger import Logger
+
 class GCL(nn.Module):
     def __init__(
         self,
@@ -268,6 +270,7 @@ class EGNN(nn.Module):
         self.normalization_factor = normalization_factor
         self.aggregation_method = aggregation_method
         self.n_dim = n_dim
+        self.in_node_nf = in_node_nf
 
         if sin_embedding:
             self.sin_embedding = SinusoidsEmbeddingNew()
@@ -289,10 +292,10 @@ class EGNN(nn.Module):
         )
 
         # TODO Ajouter un embedding séparé pour les contacts
-        self.contact_types_out = nn.Linear(hidden_nf, len(CONTACT_TYPES))
-        self.contact_orientations_out = nn.Linear(hidden_nf, self.n_dim)
+        #self.contact_types_out = nn.Linear(hidden_nf, len(CONTACT_TYPES))
+        #self.contact_orientations_out = nn.Linear(hidden_nf, self.n_dim)
 
-        self.embedding = nn.Linear(in_node_nf + len(CONTACT_TYPES) + n_dim + hidden_nf, self.hidden_nf)
+        self.embedding = nn.Linear(in_node_nf + self.hidden_nf, self.hidden_nf)
         self.embedding_out = nn.Linear(self.hidden_nf, out_node_nf)
         ##  + len(CONTACT_TYPES) + n_dim + self.hidden_nf
         for i in range(0, n_layers):
@@ -316,7 +319,7 @@ class EGNN(nn.Module):
             )
         self.to(self.device)
 
-    def forward(self, h, x, edge_index, transmission, contacts, node_mask=None, edge_mask=None, transmission_mask=None):
+    def forward(self, h, x, edge_index, transmission, node_mask=None, edge_mask=None, transmission_mask=None):
         # Edit Emiel: Remove velocity as input
         distances, _ = coord2diff(x, edge_index)
         if self.sin_embedding is not None:
@@ -337,9 +340,9 @@ class EGNN(nn.Module):
         trans_feat = trans_feat.repeat_interleave(repeats=node_max, dim=0) # [ds x node_max, hidden_nf]
         #print(f"trans_feat: {trans_feat.size()}")
         
-        h_full = torch.cat([h, contacts, trans_feat], dim=-1)
+        h_full = torch.cat([h, trans_feat], dim=-1)
         #print(f"h_full: {h_full.size()}")
-            
+        Logger.log(f"h_full: {h_full.size()}, in_node_nf: {self.in_node_nf}")
         h1 = self.embedding(h_full)
         for i in range(0, self.n_layers):
             h1, x = self._modules["e_block_%d" % i](
@@ -358,8 +361,8 @@ class EGNN(nn.Module):
             h3 = h3 * node_mask
         
         # Prédiction des contacts
-        contact_types_pred = self.contact_types_out(h1)
-        contact_orientations_pred = self.contact_orientations_out(h1)
+        #contact_types_pred = self.contact_types_out(h1)
+        #contact_orientations_pred = self.contact_orientations_out(h1)
         
         # unpacking des données de contacts et de transmission
         # Ça permet de laisser le code original de GaUDI intact
@@ -375,8 +378,7 @@ class EGNN(nn.Module):
         
         if (h3 > 1e10).any():
             print()
-        return h3, x, transmission_pred, contact_types_pred, contact_orientations_pred
-
+        return h3, x, transmission_pred
 
 class GNN(nn.Module):
     def __init__(

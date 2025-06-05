@@ -84,7 +84,7 @@ class EGNN_dynamics(nn.Module):
     def unwrap_forward(self):
         return self._forward
 
-    def _forward(self, t, xh, transmission, contacts, node_mask, edge_mask, transmission_mask, context):
+    def _forward(self, t, xh, transmission, node_mask, edge_mask, transmission_mask, context):
         bs, n_nodes, dims = xh.shape
         trans_len = transmission.size(1)
         #print(f"BS {bs}, trans_len {trans_len}, prod {bs * trans_len}, size_0 {transmission.size(0)}, size_2 {transmission.size(2)}, size_1 {transmission.size(1)}, full {transmission.size()}")
@@ -99,7 +99,7 @@ class EGNN_dynamics(nn.Module):
         # Process transmission data
         #transmission = transmission.view(bs * trans_len, -1) * transmission_mask
         # Process contacts information
-        contacts = contacts.view(bs * n_nodes, -1)
+        #contacts = contacts.view(bs * n_nodes, -1)
         
         xh = xh.view(bs * n_nodes, -1).clone() * node_mask
         x = xh[:, 0 : self.n_dims].clone()
@@ -124,8 +124,8 @@ class EGNN_dynamics(nn.Module):
             h = torch.cat([h, context], dim=1)
 
         if self.mode == "egnn_dynamics":
-            h_final, x_final, transmission_final, contact_types_final, contact_orientations_final = self.egnn(
-                h, x, edges, transmission, contacts, node_mask=node_mask, edge_mask=edge_mask, transmission_mask=transmission_mask
+            h_final, x_final, transmission_final = self.egnn(
+                h, x, edges, transmission, node_mask=node_mask, edge_mask=edge_mask, transmission_mask=transmission_mask
             )
             vel = (
                 x_final - x
@@ -133,7 +133,7 @@ class EGNN_dynamics(nn.Module):
         elif self.mode == "gnn_dynamics":
             # TODO gérer le gnn
             xh = torch.cat([x, h], dim=1)
-            output = self.gnn(xh, edges, transmission, contacts, node_mask=node_mask, transmission_mask=transmission_mask)
+            output = self.gnn(xh, edges, transmission, node_mask=node_mask, transmission_mask=transmission_mask)
             vel = output[:, 0:3] * node_mask
             h_final = output[:, 3:]
 
@@ -161,10 +161,10 @@ class EGNN_dynamics(nn.Module):
             vel = remove_mean_with_mask(vel, node_mask.view(bs, n_nodes, 1))
 
         if h_dims == 0:
-            return vel
+            return vel, transmission_final
         else:
             h_final = h_final.view(bs, n_nodes, -1)
-            return torch.cat([vel, h_final], dim=2), transmission_final, contact_types_final, contact_orientations_final
+            return torch.cat([vel, h_final], dim=2), transmission_final
 
     def get_adj_matrix(self, n_nodes, batch_size, device):
         if n_nodes in self._edges_dict:

@@ -9,6 +9,8 @@ from edm.egnn.egnn_new import EGNN, GNN
 from edm.equivariant_diffusion.utils import remove_mean, remove_mean_with_mask
 from utils.helpers import analyzed_rings
 
+from utils.extend_df import CONTACT_TYPES
+
 
 class MyDataParallel(nn.DataParallel):
     def __getattr__(self, name):
@@ -61,7 +63,7 @@ class DistributionRings:
 def get_model(args, dataloader_train, only_norm=False):
     prop_dist = DistributionProperty(args, dataloader_train, only_norm=only_norm)
 
-    in_node_nf = dataloader_train.dataset.num_node_features
+    in_node_nf = dataloader_train.dataset.num_node_features  + len(CONTACT_TYPES) + 3
     nodes_dist = DistributionRings(getattr(args, "dataset", "cata"))
 
     net_dynamics = EGNN_dynamics(

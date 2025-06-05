@@ -159,7 +159,10 @@ def contact_types_error(pred, noise, mask):
     """
     noise_indices = one_hot_to_indices(noise, mask)
     #print(f"TYPES pred {pred.shape}, noise {noise.shape}, mask {mask.shape}, indices {noise_indices.shape}")
-    error = torch.nn.CrossEntropyLoss(reduction='none')(pred, noise_indices.view(-1))
+    pred = pred.view(mask.size(0)*mask.size(1), -1)
+    noise_indices = noise_indices.view(-1)
+    Logger.log(f"pred {pred.shape}, noise_indices {noise_indices.shape}, mask {mask.shape}")
+    error = torch.nn.CrossEntropyLoss(reduction='none')(pred, noise_indices)
     return sum_except_batch(error.view(mask.size(0), mask.size(1), -1) * mask) / sum_except_batch(mask)
 
 class PositiveLinear(torch.nn.Module):
@@ -353,7 +356,7 @@ class EnVariationalDiffusion(torch.nn.Module):
         # The network that will predict the denoising.
         self.dynamics = dynamics
 
-        self.in_node_nf = in_node_nf
+        self.in_node_nf = in_node_nf - len(CONTACT_TYPES) - n_dims
         self.n_dims = n_dims
         self.in_node_trans = in_node_trans
         self.num_classes = self.in_node_nf - self.include_charges
@@ -384,8 +387,8 @@ class EnVariationalDiffusion(torch.nn.Module):
                 f"1 / norm_value = {1. / max_norm_value}"
             )
 
-    def phi(self, x, t, transmission, contacts, node_mask, edge_mask, transmission_mask, context):
-        net_out = self.dynamics._forward(t, x, transmission, contacts, node_mask, edge_mask, transmission_mask, context)
+    def phi(self, x, t, transmission, node_mask, edge_mask, transmission_mask, context):
+        net_out = self.dynamics._forward(t, x, transmission, node_mask, edge_mask, transmission_mask, context)
 
         return net_out
 
@@ -683,7 +686,7 @@ class EnVariationalDiffusion(torch.nn.Module):
     def compute_loss(self, x, h, transmission, contact_types, contact_orientations, node_mask, edge_mask, transmission_mask, context, t0_always):
         """Computes an estimator for the variational lower bound, or the simple loss (MSE)."""
 
-        Logger.log(f"\nCOMPUTE_LOSS x {x.size()}, h {h['categorical'].size()}, transmission {transmission.size()}, contact_types {contact_types.size()}, contact_orientations {contact_orientations.size()}")
+        #Logger.log(f"\nCOMPUTE_LOSS x {x.size()}, h {h['categorical'].size()}, transmission {transmission.size()}, contact_types {contact_types.size()}, contact_orientations {contact_orientations.size()}")
 
         # This part is about whether to include loss term 0 always.
         if t0_always:
@@ -718,6 +721,7 @@ class EnVariationalDiffusion(torch.nn.Module):
         eps = self.sample_combined_position_feature_noise(
             n_samples=x.size(0), n_nodes=x.size(1), node_mask=node_mask
         )
+        Logger.log(f"eps_orig {eps.size()}")
         #print(transmission_mask.size())
         #eps_trans = utils.sample_gaussian_with_mask(
         #    size=(transmission_mask.size(0), transmission_mask.size(1)),
@@ -730,31 +734,40 @@ class EnVariationalDiffusion(torch.nn.Module):
         eps_contacts = self.sample_contact_noise(
             n_samples=x.size(0), n_nodes=x.size(1), node_mask=node_mask
         )
+        Logger.log(f"eps_contacts {eps_contacts.size()}")
+
+        eps = torch.cat([eps, eps_contacts], dim=2)
 
         # Concatenate x, h[integer] and h[categorical].
-        xh = torch.cat([x, h["categorical"], h["integer"]], dim=2)
-        contacts = torch.cat([contact_types, contact_orientations], dim=2)
+        xh = torch.cat([x, h["categorical"], h["integer"], contact_types, contact_orientations], dim=2)
+        #contacts = torch.cat([contact_types, contact_orientations], dim=2)
         # Sample z_t given x, h for timestep t, from q(z_t | x, h)
+        Logger.log(f"x {x.size()}, h_categorical {h['categorical'].size()}, h_integer {h['integer'].size()}, transmission {transmission.size()}")
+        Logger.log(f"contact_types {contact_types.size()}, contact_orientations {contact_orientations.size()}")
+        Logger.log(f"xh {xh.size()}, eps {eps.size()}, transmission {transmission.size()}")
         z_t = alpha_t * xh + sigma_t * eps
         z_trans = torch.add(alpha_t.squeeze(2) * transmission, sigma_t.squeeze(2) * eps_trans)
-        z_contacts = torch.add(alpha_t * contacts, sigma_t * eps_contacts)
+        #z_contacts = torch.add(alpha_t * contacts, sigma_t * eps_contacts)
 
         diffusion_utils.assert_mean_zero_with_mask(z_t[:, :, : self.n_dims], node_mask)
 
-        Logger.log(f"xh {xh.size()}, eps {eps.size()}, z_t {z_t.size()}")
-        Logger.log(f"transmission {transmission.size()}, z {z_trans.size()}, eps {eps_trans.size()}")
-        Logger.log(f"contacts {contacts.size()}, z_contacts {z_contacts.size()}, eps_contacts {eps_contacts.size()}")
-        Logger.log(f"alpha_t {alpha_t.size()}, sigma_t {sigma_t.size()}")
+        #Logger.log(f"xh {xh.size()}, eps {eps.size()}, z_t {z_t.size()}")
+        #Logger.log(f"transmission {transmission.size()}, z {z_trans.size()}, eps {eps_trans.size()}")
+        #Logger.log(f"contacts {contacts.size()}, z_contacts {z_contacts.size()}, eps_contacts {eps_contacts.size()}")
+        #Logger.log(f"alpha_t {alpha_t.size()}, sigma_t {sigma_t.size()}")
 
         # Neural net prediction.
-        net_out = self.phi(z_t, t, z_trans, z_contacts, node_mask, edge_mask, transmission_mask, context)
-        xh_pred, transmission_pred, contact_types_pred, contact_orientations_pred = net_out
+        net_out = self.phi(z_t, t, z_trans, node_mask, edge_mask, transmission_mask, context)
+        xh_pred, transmission_pred = net_out
+        no_xh, no_ct, no_co = xh_pred[:, :, :-(self.n_dims + len(CONTACT_TYPES))], xh_pred[:, :, -(self.n_dims + len(CONTACT_TYPES)):-self.n_dims], xh_pred[:, :, -self.n_dims:]
+        eps_xh, eps_ct, eps_co = eps[:, :, :-(self.n_dims + len(CONTACT_TYPES))], eps[:, :, -(self.n_dims + len(CONTACT_TYPES)):-self.n_dims], eps[:, :, -self.n_dims:]
+        
         # Compute the error.
-        error = self.compute_error(xh_pred, gamma_t, eps)
+        error = self.compute_error(no_xh, gamma_t, eps_xh)
         error_trans = transmission_error(transmission_pred, eps_trans, transmission_mask.squeeze())
-        eps_contact_types, eps_contact_orientations = eps_contacts[:, :, :len(CONTACT_TYPES)], eps_contacts[:, :, len(CONTACT_TYPES):]
-        error_contact_orientations = contact_orientations_error(contact_orientations_pred, eps_contact_orientations, node_mask)
-        error_contact_types = contact_types_error(contact_types_pred, eps_contact_types, node_mask)
+        #eps_contact_types, eps_contact_orientations = eps_contacts[:, :, :len(CONTACT_TYPES)], eps_contacts[:, :, len(CONTACT_TYPES):]
+        error_contact_orientations = contact_orientations_error(no_co, eps_co, node_mask)
+        error_contact_types = contact_types_error(no_ct, eps_ct, node_mask)
 
         #print(f"xh {error.shape}, transmission {error_trans.shape}, contact_types {error_contact_types.shape}, contact_orientations {error_contact_orientations.shape}")
 
@@ -764,8 +777,8 @@ class EnVariationalDiffusion(torch.nn.Module):
             # Compute weighting with SNR: (SNR(s-t) - 1) for epsilon parametrization.
             SNR_weight = (self.SNR(gamma_s - gamma_t) - 1).squeeze(1).squeeze(1)
         assert error.size() == SNR_weight.size()
-        w_xh, w_transmission, w_contact_types, w_contact_orientations = 0.5, 1., 1., 1.
-        loss_t_larger_than_zero = SNR_weight * (w_xh*error + w_transmission*error_trans + w_contact_types*error_contact_types + w_contact_orientations*error_contact_orientations)
+        w_xh, w_transmission, w_ct, w_co = 0.5, 1., 1., 1.
+        loss_t_larger_than_zero = SNR_weight * (w_xh*error + w_transmission*error_trans + w_ct*error_contact_types + w_co*error_contact_orientations)
 
         # The _constants_ depending on sigma_0 from the
         # cross entropy term E_q(z0 | x) [log p(x | z0)].
@@ -805,12 +818,15 @@ class EnVariationalDiffusion(torch.nn.Module):
             eps_contacts_0 = self.sample_contact_noise(
                 n_samples=x.size(0), n_nodes=x.size(1), node_mask=node_mask
             )
+            eps_0 = torch.cat([eps_0, eps_contacts_0], dim=2)
             z_0 = alpha_0 * xh + sigma_0 * eps_0
             z_trans_0 = alpha_0.squeeze(2) * transmission + sigma_0.squeeze(2) * eps_trans_0
-            z_contacts_0 = alpha_0 * contacts + sigma_0 * eps_contacts_0
+            #z_contacts_0 = alpha_0 * contacts + sigma_0 * eps_contacts_0
 
-            net_out = self.phi(z_0, t_zeros, z_trans_0, z_contacts_0, node_mask, edge_mask, transmission_mask, context)
-            xh_pred, transmission_pred, contact_types_pred, contact_orientations_pred = net_out
+            net_out = self.phi(z_0, t_zeros, z_trans_0, node_mask, edge_mask, transmission_mask, context)
+            xh_pred, transmission_pred = net_out
+            no_xh_0, no_ct_0, no_co_0 = xh_pred[:, :, :-(self.n_dims + len(CONTACT_TYPES))], xh_pred[:, :, -(self.n_dims + len(CONTACT_TYPES)):-self.n_dims], xh_pred[:, :, -self.n_dims:]
+            eps_xh_0, eps_ct_0, eps_co_0 = eps[:, :, :-(self.n_dims + len(CONTACT_TYPES))], eps[:, :, -(self.n_dims + len(CONTACT_TYPES)):-self.n_dims], eps[:, :, -self.n_dims:]
 
             loss_term_0 = -self.log_pxh_given_z0_without_constants(
                 x, h, z_0, gamma_0, eps_0, xh_pred, node_mask
