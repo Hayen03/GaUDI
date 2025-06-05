@@ -887,7 +887,7 @@ class EnVariationalDiffusion(torch.nn.Module):
         return neg_log_pxh
 
     def sample_p_zs_given_zt(
-        self, s, t, zt, node_mask, edge_mask, context, fix_noise=False
+        self, s, t, zt, z_contacts, node_mask, edge_mask, context, transmission, transmission_mask, fix_noise=False
     ):
         """Samples from zs ~ p(zs | zt). Only used during sampling."""
         gamma_s = self.gamma(s).to(s.device)
@@ -903,7 +903,7 @@ class EnVariationalDiffusion(torch.nn.Module):
         sigma_t = self.sigma(gamma_t, target_tensor=zt)
 
         # Neural net prediction.
-        eps_t = self.phi(zt, t, node_mask, edge_mask, context)
+        eps_t = self.phi(zt, t, transmission, z_contacts, node_mask, edge_mask, transmission_mask, context)
 
         # Compute mu for p(zs | zt).
         diffusion_utils.assert_mean_zero_with_mask(zt[:, :, : self.n_dims], node_mask)
@@ -1061,10 +1061,12 @@ class EnVariationalDiffusion(torch.nn.Module):
     @torch.no_grad()
     def sample(
         self,
+        transmission,
         n_samples,
         n_nodes,
         node_mask,
         edge_mask,
+        transmission_mask,
         context=None,
         fix_noise=False,
         std=1.0,
@@ -1075,10 +1077,12 @@ class EnVariationalDiffusion(torch.nn.Module):
         if fix_noise:
             # Noise is broadcasted over the batch axis, useful for visualizations.
             z = self.sample_combined_position_feature_noise(1, n_nodes, node_mask, std)
+            z_contacts = self.sample_contact_noise(1, n_nodes, node_mask, std)
         else:
             z = self.sample_combined_position_feature_noise(
                 n_samples, n_nodes, node_mask, std
             )
+            z_contacts = self.sample_contact_noise(n_samples, n_nodes, node_mask, std)
 
         diffusion_utils.assert_mean_zero_with_mask(z[:, :, : self.n_dims], node_mask)
 
@@ -1089,8 +1093,8 @@ class EnVariationalDiffusion(torch.nn.Module):
             s_array = s_array / self.T
             t_array = t_array / self.T
 
-            z = self.sample_p_zs_given_zt(
-                s_array, t_array, z, node_mask, edge_mask, context, fix_noise=fix_noise
+            z, z_contacts = self.sample_p_zs_given_zt(
+                s_array, t_array, z, z_contacts, node_mask, edge_mask, context, transmission, transmission_mask, fix_noise=fix_noise
             )
 
         # Finally sample p(x, h | z_0).
